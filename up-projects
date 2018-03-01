@@ -1,0 +1,214 @@
+#!/usr/bin/env python
+
+import logging
+import argparse
+from up_projects.up_projects import ProjectsDir
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(levelname)s\t\t%(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+logging.getLogger('git').addHandler(handler)
+
+PROJECTS_DIR = None
+GITHUB_USERNAME = None
+UP_PROJECTS_REMOTE_NAME = None
+UP_PROJECTS_COMPLETE_TAG = None
+
+
+def gogogo():
+    projects_dir = ProjectsDir(PROJECTS_DIR)
+    logger.debug('Will look for projects in: %s', projects_dir.projects_dir)
+
+    print()
+    print()
+    print('Will attempt to up-projects from:')
+    print()
+    print('\t{}'.format(projects_dir.projects_dir))
+    print()
+    print()
+    print('Using Github username:')
+    print()
+    print('\t{}'.format(GITHUB_USERNAME))
+    print()
+    print()
+    print()
+    input('Press enter to continue, or ctrl-c to quit')
+    print()
+
+    projects = projects_dir.get_projects()
+    logger.debug('Found %s projects', len(projects))
+
+    for project in projects:
+        logger.info('-- %s', project)
+
+        if project.is_empty:
+            logger.info('%s: empty, skipping', project)
+            project.you_failed('Directory empty')
+            continue
+        else:
+            logger.debug('%s: not empty', project)
+
+        if not project.is_repo:
+            logger.info('%s: not a git repo!', project)
+            project.you_failed('Not a git repo')
+            continue
+        else:
+            logger.debug('%s: is repo', project)
+
+        try:
+            if project.repo.tags[UP_PROJECTS_COMPLETE_TAG]:
+                logger.info('%s: already done, skipping', project)
+                continue
+        except IndexError:
+            logger.debug('%s: not complete, will process')
+
+        if not project.has_remote(UP_PROJECTS_REMOTE_NAME):
+            logger.info(
+                '%s: does not have a remote named %s',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+            )
+
+            remote_url = 'git@github.com:{}/{}.git'.format(
+                GITHUB_USERNAME,
+                project.name,
+            )
+
+            logger.debug(
+                '%s: New remote details %s -> %s',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+                remote_url,
+            )
+
+            project.create_remote(UP_PROJECTS_REMOTE_NAME, remote_url)
+            logger.warning(
+                '%s: Created remote: %s -> %s',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+                remote_url,
+            )
+        else:
+            logger.debug('%s: has remote', project)
+
+        logger.info('%s: Fetching...', project)
+        if not project.do_fetch(UP_PROJECTS_REMOTE_NAME):
+            logger.warn(
+                '%s: Unable to fetch from remote named: %s.',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+            )
+            logger.warn(
+                '%s: You probably just need to create the %s/%s repo.',
+                project,
+                GITHUB_USERNAME,
+                project,
+            )
+            logger.info('%s: Aborted as unable to fetch', project)
+            project.you_failed('Unable to do a fetch (does repo exist?)')
+            continue
+        else:
+            logger.debug('%s: Fetch went OK', project)
+        logger.info('%s: ... fetched', project)
+
+        if project.is_dirty:
+            logger.warning(
+                '%s: is dirty, you need to manually commit.',
+                project,
+            )
+            logger.info('%s: Aborted as dirty', project)
+            project.you_failed('Dirty')
+            continue
+        else:
+            logger.debug('%s: not dirty', project)
+
+        logger.info('%s: Pushing branches...', project)
+        if not project.do_push_branches(UP_PROJECTS_REMOTE_NAME):
+            logger.error(
+                '%s: Unable to push branches to remote named: %s.',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+            )
+            logger.info('%s: Aborted as unable to push branches', project)
+            project.you_failed('Unable to push branches')
+            continue
+        else:
+            logger.debug('%s: Branch push went ok')
+        logger.info('%s: ... pushed branches', project)
+
+        logger.info('%s: Pushing tags...', project)
+        if not project.do_push_tags(UP_PROJECTS_REMOTE_NAME):
+            logger.error(
+                '%s: Unable to push tags to remote named: %s.',
+                project,
+                UP_PROJECTS_REMOTE_NAME,
+            )
+            logger.info('%s: Aborted as unable to push tags', project)
+            project.you_failed('Unable to push tags')
+            continue
+        else:
+            logger.debug('%s: Tag push went ok', project)
+        logger.info('%s: ... pushed tags', project)
+
+        logger.info('%s: Tagging project as complete...', project)
+        project.repo.create_tag(UP_PROJECTS_COMPLETE_TAG)
+        logger.info('%s: ... tagged', project)
+
+    projects_done = [project for project in projects if not project.failed]
+    projects_failed = [project for project in projects if project.failed]
+
+    print()
+    print()
+    print('Upped the following projects:')
+    print()
+    for project in projects_done:
+        print('\t{}'.format(project))
+
+    print()
+    print()
+    print('Projects remaining:')
+    print()
+    for project in projects_failed:
+        print('\t{} : {}'.format(project, project.failed_reason))
+    print()
+
+
+def create_argument_parser():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        'dir',
+        action='store',
+    )
+    parser.add_argument(
+        'username',
+        action='store',
+    )
+    parser.add_argument(
+        '--remote-name',
+        action='store',
+        default='up-projects',
+    )
+    parser.add_argument(
+        '--complete-tag',
+        action='store',
+        default='up-projects-complete',
+    )
+    return parser
+
+
+if __name__ == '__main__':
+    parser = create_argument_parser()
+    args = parser.parse_args()
+
+    PROJECTS_DIR = args.dir
+    GITHUB_USERNAME = args.username
+    UP_PROJECTS_REMOTE_NAME = args.remote_name
+    UP_PROJECTS_COMPLETE_TAG = args.complete_tag
+
+    gogogo()
